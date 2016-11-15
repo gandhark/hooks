@@ -1,0 +1,25 @@
+#!/bin/bash
+###################################################
+### 	Pre-Commit Hook for Jira		###	
+###################################################
+
+branch_name=$(git symbolic-ref --short HEAD|cut -d'/' -f 2) # Extracting proper branch name  for Branching Model
+project_id=$(echo "$branch_name" |cut -d '-' -f1) # Extracting project-id will print project-id Eg ATM
+issueNumber=$(echo "$branch_name" |cut -d '-' -f2) #Extracting Issue Number. will print issue number Eg 5
+IssueId=$project_id-$issueNumber; #Combine both to get IssueId Eg ATM-5
+echo  -e "###############---------------###############\n"
+echo  -e "     Now Checking Your Commit Message!!\n      ";
+echo -e "###############---------------###############\n";
+test "" != "$(grep "$IssueId" "$1")" && echo -e "@@@@@@@@@@@@@@@@@@@@@@@@@@@\nValid Commit Message!\nThank you!\nProceeding for Commit!\n@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"|| { 
+echo -e "ERROR: Commit message is missing valid JIRA ticket number\n"
+echo -e	"###############---------------###############\n"
+echo -e	 "Eg. $project_id-$issueNumber should be in Commit message.  \n  \t $issueNumber is number of ticket  \n\t and $project_id is Jira Project ID logged in JIRA\n"
+echo -e "###############---------------###############" 
+echo -e	 "Please append the JIRA ticket number relative"
+echo -e	 "to this commit into the commit message."
+echo -e "###############---------------###############"
+echo -e	 "            Failed to commit!!              "
+echo -e	"###############---------------###############"
+     exit 1;
+}
+

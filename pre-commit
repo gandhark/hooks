@@ -1,0 +1,65 @@
+style=" \n##############################---------------------------############################## ";
+echo -e  $style;
+echo -e  "\n\t\t\tRunning Sonar Analysis on Updated Code";
+echo -e  $style;
+
+
+####      variable declarations       #######
+
+ERROR_CODE=0;
+MESSAGE1="\n\t\t Hey Developer!!!!!!CONGRATULATIONS!!!!!!! No new sonar Issues";
+MESSAGE2="\n\t\t You just commited code on local";
+pattern=( minor major blocker critical );
+
+OUTPUT="$(sonar-runner -Dsonar.analysis.mode=incremental -Dsonar.issuesReport.console.enable=true -Dsonar.issuesReport.html.enable -Dsonar.issuesReport.html.location=/home/ashish/Desktop/ALM_81_Demo/alm_task_manager )";
+
+#cow="\n\n\n\n---------------------------------------------------------------------\n< Failed  > you can refer to HTML report(issues-report.html) of sonar analysis\n--------------------------------------------------------------\n  |  ^__^\n   - (oo)|_______ \n     (__)|       )/|/\n         ||----w |\n        ||     ||\n\n\n\n";
+
+
+
+# This will run sonar analysis in incremental mode with issue report plugin.
+# To run this and function correctly, you have to install Sonar Issur report Plugin within SonarQube server.
+# After Running this command it will generate HTML reports which will have all issues present in updated/new files.
+#Print Output of sonar analysis for debug purpose.
+
+echo "${OUTPUT}";
+
+
+if     echo "$OUTPUT" | grep -q "EXECUTION FAILURE"; then
+        ERROR_CODE=2;
+        MESSAGE1="\n\t  SONARQUBE EXECUTION FAILURE..Hey Developer!!!!You cannot COMMIT  ";
+ fi
+
+#Tere is problem in sonarqube execution
+        if [ $ERROR_CODE -eq 2 ] ; then
+                echo -e  $style  $MESSAGE1  $style;
+                exit 1;
+        fi;
+
+
+for  i in  ${!pattern[@]};
+do
+        if     echo "$OUTPUT" | grep -q "${pattern[$i]}"; then
+               ERROR_CODE=1;
+                MESSAGE1="\n\t\t         Hey Developer!!!!!!your code is having either critical or major or blocker issues";
+                MESSAGE2="\n\t\t\t\t                              You cannot COMMIT ";
+
+        fi
+done
+
+
+#Code is having either major or critical or blocker issues.
+         if [ $ERROR_CODE -eq  1 ] ; then
+                echo -e $style $MESSAGE1 $MESSAGE2 $style;
+                #echo -e $cow;
+                echo -e "\n\n\n\n------------------------------------------\n< Failed  > you can refer to HTML report(issues-report.html) of sonar analysis\n----------------------------------------\n  |  ^__^\n   - (oo)|_______\n     (__)|       )/|/\n         ||----w |\n        ||     ||\n\n\n\n";
+                echo -e $style;
+                exit 1;
+        fi;
+
+
+#Code is perfect from static code analysis...No issues..ready for commit.
+         if [ $ERROR_CODE -eq  0 ] ; then
+                echo -e $style $MESSAGE1  $style;
+        fi;
+

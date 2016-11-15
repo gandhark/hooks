@@ -1,0 +1,187 @@
+#!/usr/bin/python
+# coding: utf-8
+
+import re, subprocess, sys, jcp_common
+from jcp_config import *
+
+hook_script_version = 1
+
+
+def git(args_str, pipe_errors=False):
+    logger.verbose("> git %s" % args_str)
+    git_args = ["git"]
+    git_args.extend(args_str.split())
+    if not pipe_errors:
+        proc = subprocess.Popen(git_args, stdout=subprocess.PIPE)
+    else:
+        proc = subprocess.Popen(git_args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    results = proc.communicate()[0]
+    code = proc.returncode
+    if jcp_common.hook_platform.python3():    # in Python3, this is a "bytes" object
+        results = results.decode("utf-8")
+    logger.verbose("(Return code: %s)" % code)
+    logger.verbose(results.strip())
+    return results, code
+
+
+def started_manually():
+    return not sys.argv[0].startswith("hooks")
+
+
+def read_ref_info_lines():
+    lines = sys.stdin.read().splitlines()
+    lines.reverse()    # reverse to match chronological order
+    return lines
+
+
+def get_changed_files_in_commit(commit):
+    (results, code) = git("show --pretty=format: --name-status %s" % commit)
+    lines = results.strip().splitlines()
+    files = []
+    for file_entry in lines:
+        if file_entry.strip() == "":
+            continue
+        parts = file_entry.split()
+        type = get_file_action_mapping(parts[0])
+        path = " ".join(parts[1:])
+        # File names are surrounded by double quotation marks and unicode-escaped. After processing, the result must be
+        # converted to a latin-1 byte stream to be able to extract the UTF-8 characters from it:
+        path = path.strip('"').encode('utf-8').decode("unicode_escape").encode('latin-1')
+        if jcp_common.hook_platform.python3():
+            path = path.decode("utf-8")
+        files.append(jcp_common.create_file_descriptor(path, type))
+    return files
+
+
+def get_file_action_mapping(key):
+    # see --diff-filter documentation at http://git-scm.com/docs/git-diff-tree
+    action_code_map = {
+        "A": "a",
+        "D": "d",
+        "M": "m",
+        "C": "m",
+        "R": "m",
+        "T": "m",
+        "U": "?",
+        "X": "?",
+        "B": "?"
+    }
+    return "?" if key not in action_code_map else action_code_map[key]
+
+
+def is_repo_empty():
+    (results, code) = git("log -n 1", True)
+    return code != 0
+
+
+def normalize_zero_commit(base, commit):
+    # All zeroes commit: placeholder for not-created-yet ref (e.g. new branch), find the latest not-yet pushed
+    # commit (latest one from commits only reachable from the tip of the newly created branch) and proceed with that.
+    # See: http://stackoverflow.com/a/18979431/669897 and http://stackoverflow.com/a/19738143/669897
+    if re.match("^0+$", base):
+        if is_repo_empty():
+            # empty repo
+            logger.verbose("Repo seems to be empty (no commits yet), setting comparison base to hardcoded hash value.\n")
+            return empty_repo_hash
+        # new branch
+        (results, code) = git("rev-list %s --not --branches=*" % commit)
+        logger.verbose("Ref was all zeroes, found these revisions:\n%s" % results.splitlines(True))
+        commit_lines = results.splitlines()
+        if len(commit_lines) == 0:
+            return None
+        first_commit_of_ref = commit_lines[-1]
+        logger.verbose("First commit of ref was %s" % first_commit_of_ref)
+        base = first_commit_of_ref + "^!"
+    return base
+
+
+def is_merge_commit(commit):
+    (results, code) = git("rev-list --parents --max-count 1 %s" % commit)
+    parent_count = len(results.strip().split()) - 1
+    return parent_count > 1
+
+def get_commit_list_for_ref(base, commit, ref, retain_original_messages=False):
+    # For information on rev-parse, see http://stackoverflow.com/a/24226281/669897
+    logger.verbose("Getting commits between %s and %s for ref %s" % (base, commit, ref))
+    base = normalize_zero_commit(base, commit)
+    if base is None:
+        logger.verbose("There are no new commits to check for this ref, skipping")
+        return []
+    base_is_a_complex_ref = not base[-1].isalnum()
+    operators = " " if base_is_a_complex_ref else ".."
+    (results, code) = git("log --format=format:%h|||%an|||%ae|||%s " + "%s%s%s" % (base, operators, commit))
+    results = results.splitlines()
+    commits = []
+    for raw_commit in results:
+        fields = raw_commit.strip().split("|||")
+        (current_commit, name, email) = fields[:3]
+        message = "|||".join(fields[3:])
+        if not retain_original_messages:
+            message = jcp_common.remove_verbose_logging_marker(message)
+        file_list = get_changed_files_in_commit(current_commit)
+        formatted_name_email = "%s <%s>" % (name, email)
+        commit_dict = jcp_common.create_commit_dict(current_commit, formatted_name_email, message, file_list, ref,
+                                                    is_merge=is_merge_commit(current_commit))
+        commits.append(commit_dict)
+    return commits
+
+
+def get_commit_list(ref_info_lines, retain_original_messages=False):
+    commits = []
+    logger.verbose("base/commit/ref data read from environment (one line per ref):\n" + "\n".join(ref_info_lines) + "\n")
+    for ref_info_line in ref_info_lines:
+        (base, commit, ref) = ref_info_line.strip().split()
+        commits.extend(get_commit_list_for_ref(base, commit, ref, retain_original_messages))
+    commits.reverse()    # reverse to match chronological order
+    return commits
+
+
+def find_repo_path():
+    import os
+    try:
+        path = os.path.abspath(__file__).split(os.path.sep)
+        path.reverse()
+        try:
+            repo_path = path[path.index(".git")+1:]
+        except ValueError:
+            repo_path = path[2:]
+        repo_path.reverse()
+        return os.path.sep.join(repo_path)
+    except Exception:
+        return ""
+
+
+jcp_common.hook_platform.vcs = "git"
+empty_repo_hash = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"  # http://stackoverflow.com/q/9765453/669897
+
+if started_manually():
+    diagnostics = jcp_common.Diagnostics(commit_policy_id, jira_base_url, jira_login, jira_password, hook_script_version, find_repo_path())
+    diagnostics.run()
+    error_code = 0
+else:
+    logger = jcp_common.Logger()
+    ref_info_lines = read_ref_info_lines()
+    try:
+        from collections import defaultdict
+        commit_list = get_commit_list(ref_info_lines, retain_original_messages=True)
+        raw_messages_by_ref = defaultdict(list)
+        for commit in commit_list:
+            raw_messages_by_ref[commit["branch"]].append(commit["message"])
+        if jcp_common.hook_platform.python3():
+            items = raw_messages_by_ref.items()
+        else:
+            items = raw_messages_by_ref.iteritems()
+        for ref, raw_messages in items:
+            raw_message = raw_messages[-1]
+            if jcp_common.has_verbose_logging_marker(raw_message):
+                logger.verbose_enabled = True
+                break
+    except Exception as e:
+        pass
+
+    logger.script_start()
+    error_code = jcp_common.invoke_verify_service(commit_policy_id, get_commit_list(ref_info_lines), jira_base_url, jira_login, jira_password, hook_script_version, find_repo_path())
+    jcp_common.print_stderr("\n")
+    logger.script_end()
+
+sys.exit(error_code)
